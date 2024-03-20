@@ -1,0 +1,377 @@
+---
+title: "Port1"
+author: "LAURA PAABY"
+date: "2024-02-08"
+output: html_document
+---
+
+
+#### Installing Packages 
+```{r}
+pacman::p_load(tidyverse,
+        here,
+        posterior,
+        cmdstanr,
+        brms, tidybayes)
+```
+
+
+```{r}
+trials <- 120
+agents <- 100
+rate <- .7
+```
+
+
+## win stay loose shift: 
+These agents take in the an input of previous choice, feedback (whether or not the previous was correct)
+```{r}
+# as a function - this is a deterministic model (in a extreme reinforcement kind of way), so it will always 
+WSLSAgent_f <- function(prevChoice, Feedback){
+  if (Feedback == 1) {
+    choice = prevChoice
+  } else if (Feedback == 0) {
+      choice = 1 - prevChoice
+      }
+  return(choice)
+}
+
+##### now adding noise: 
+WSLSAgentNoise_f <- function(prevChoice, Feedback, noise){
+  if (Feedback == 1) {
+    choice = prevChoice
+  } else if (Feedback == 0) {
+      choice = 1 - prevChoice
+  }
+  if (rbinom(1, 1, noise) == 1) {choice <- rbinom(1, 1, .5)}
+  return(choice)
+}
+
+```
+
+
+Now to make it probalistic instead of deterministic, we add the random binomial sampling to let the stay or shift behavior not completely depend on the previous trial, but also on the some randomness :) 
+
+```{r}
+##### making it probablistic 
+## this function results in different noise rates for winning and loosing 
+WSLSAgentProbDouble_f <- function(prevChoice, Feedback, win_rate, lose_rate){
+  if (Feedback==1) {
+    choice_win = rbinom(1,1,win_rate)
+      if (choice_win == 1) {
+        choice = prevChoice
+      } else {
+        if (choice_win == 0) {
+          choice = 1-prevChoice
+        } 
+    }
+  } else if (Feedback == 0) {
+    choice_lose = rbinom(1,1,lose_rate)
+      if (choice_lose == 1) {
+        choice = prevChoice
+      } else {
+        if (choice_lose == 0) {
+          choice = 1-prevChoice
+        } 
+      }
+    }
+  return(choice)
+}  
+
+
+
+## this function results has the same noise rate for winning and loosing: 
+WSLSAgentProb_f <- function(prevChoice, Feedback, rate) {
+  stick_to_strategy = rbinom(1, 1, rate)  # Generate a random decision based on the rate: whether to stick with the WSLS strategy or not
+  
+  if (stick_to_strategy == 1) { # Agent sticks to the WSLS strategy
+    if (Feedback == 1) {
+      choice = prevChoice # Win-Stay
+    } else {
+      choice = 1 - prevChoice # Lose-Shift
+    }
+  } else { # Agent deviates from the WSLS strategy
+    choice = ifelse(prevChoice == 1, 0, 1) # Shift regardless of win/lose
+  }
+  
+  return(choice)
+}
+
+
+```
+
+
+#### Playing against another agent 
+For now we let it play against another agent... 
+
+```{r}
+# Against a random agent
+RandomAgent_f <- function(input, rate){
+  n <- length(input)
+  choice <- rbinom(n, 1, rate)
+  return(choice)
+}
+```
+
+Storing the choices of the two agents: 
+```{r}
+### trials we play
+trials <- 120 
+
+Self <- rep(NA, trials)
+Other <- rep(NA, trials)
+
+Self[1] <- rbinom(1,1,.5) # the first choice of our wsls agent1 
+Other[1] <- rbinom(1,1,.5) # the first choice of our wsls agent2
+```
+
+
+Looping over number of trials for them to play: 
+```{r}
+### setting the lose and win rate for the wsls agents: 
+win_pref_self <- .95
+lose_pref_self <- .90
+
+win_pref_other <- .65
+lose_pref_other <- .75
+
+
+#### lettinig them play one another for 120 trials
+for (i in 2:trials) {
+  if (Self[i - 1] == Other[i - 1]) {
+    Feedback = 1
+  } else {Feedback = 0}
+  Self[i] <- WSLSAgentProbDouble_f(Self[i - 1], Feedback, win_pref_self, lose_pref_self) # updating where Self[i - 1] is the choice of the previous round
+  Other[i] <- WSLSAgentProbDouble_f(Other[i - 1], 1 - Feedback, win_pref_other, lose_pref_other)
+  
+}
+
+```
+
+
+# Visualization of two players (one random one wsls): 
+```{r}
+df <- tibble(Self, Other, trial = seq(trials), Feedback = as.numeric(Self == Other))
+
+ggplot(df) + theme_classic() +
+  geom_line(color = "red", aes(trial, Self)) +
+  geom_line(color = "blue", aes(trial, Other))
+
+
+```
+
+```{r}
+df$cumulativerateSelf <- cumsum(df$Feedback) / seq_along(df$Feedback)
+df$cumulativerateOther <- cumsum(1 - df$Feedback) / seq_along(df$Feedback)
+
+ggplot(df) + theme_classic() +
+  geom_line(color = "red", aes(trial, cumulativerateSelf)) +
+  geom_line(color = "blue", aes(trial, cumulativerateOther))
+```
+
+
+
+### Scaling it up for several agents: 
+
+```{r}
+trials = 120
+agents = 100
+
+## WSLS playing other WSLS agents  
+
+for (agent in seq(agents)) {
+    Self_all <- rep(NA, trials)
+    Other_all <- rep(NA, trials)
+    
+    Self_all[1] <- rbinom(1,1,.5) 
+    Other_all[1] <- rbinom(1,1,.5) 
+    
+    ### win lose rates for each of the agents
+    win_pref_int <- runif(1,min=.85,max=.9999)
+    lose_pref_int <- runif(1,min=.65,max=.9999)
+      
+    for (i in 2:trials) {
+      if (Self_all[i - 1] == Other_all[i - 1]) {
+        Feedback = 1
+      } else {Feedback = 0}
+      
+      
+      Self_all[i] <- WSLSAgentProbDouble_f(Self_all[i - 1], Feedback, win_pref_int, lose_pref_int) # updating where Self[i - 1] is the choice of the previous round
+      Other_all[i] <- WSLSAgentProbDouble_f(Other_all[i - 1], 1 - Feedback, win_pref_int, lose_pref_int)
+    }
+    
+    temp <- tibble(Self_all, Other_all, trial = seq(trials), Feedback = as.numeric(Self_all == Other_all), agent)
+    
+    if (agent == 1) {df1 <- temp} else {df1 <- bind_rows(df1, temp)}
+  }
+```
+
+it is hard to visualize this with many parameters ... 
+so now lets do it with a fixed rate: 
+
+```{r}
+trials = 150
+agents = 150
+
+## WSLS playing other WSLS agents  
+
+for (agent in seq(agents)) {
+    Self_all <- rep(NA, trials)
+    Other_all <- rep(NA, trials)
+    
+    Self_all[1] <- rbinom(1,1,.5) 
+    Other_all[1] <- rbinom(1,1,.5) 
+    
+    ### win lose rates for each of the agents
+    rate <- runif(1,min=.80,max=1)
+      
+    for (i in 2:trials) {
+      if (Self_all[i - 1] == Other_all[i - 1]) {
+        Feedback = 1
+      } else {Feedback = 0}
+      
+      
+      Self_all[i] <- WSLSAgentProb_f(Self_all[i - 1], Feedback, rate) # updating where Self[i - 1] is the choice of the previous round
+      Other_all[i] <- WSLSAgentProb_f(Other_all[i - 1], 1 - Feedback, rate)
+    }
+    
+    temp <- tibble(Self_all, Other_all, trial = seq(trials), Feedback = as.numeric(Self_all == Other_all), agent, rate)
+    
+    if (agent == 1) {df3 <- temp} else {df3 <- bind_rows(df3, temp)}
+}
+```
+
+
+#### visualizing the game:
+```{r}
+#####Effect of the Rate Parameter on Performance
+df3 %>%
+  group_by(agent, rate) %>%
+  summarize(average_win_rate = mean(Feedback)) %>%
+  ggplot(aes(x = rate, y = average_win_rate)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE, color = "red") +
+  labs(title = "Effect of Rate on Average Win Rate",
+       x = "Rate",
+       y = "Average Win Rate (Feedback)") +
+  theme_minimal()
+
+```
+```{r}
+# Calculate average win rate for each rate
+rate_performance <- df3 %>%
+  group_by(rate) %>%
+  summarize(average_win_rate = mean(Feedback)) %>%
+  mutate(rate_group = cut(rate, breaks = 10)) # Grouping rates into discrete bins for heatmap
+
+# Creating the heatmap
+ggplot(rate_performance, aes(x = rate_group, y = average_win_rate)) +
+  geom_tile(aes(fill = average_win_rate)) + 
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(title = "Heatmap of Rate Parameter Effect on Performance",
+       x = "Rate Group",
+       y = "Average Win Rate (Feedback)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) 
+```
+
+
+# Theory of Mind 
+Adding a layer of Theory of Mind
+- I would like to let it end in heat maps visualizations of the noise of th
+
+```{r}
+# New function to infer opponent's next move based on feedback history
+ToM <- function(feedback_history) {
+  # Simple heuristic: If opponent won last, they might stick; if they lost, they might switch
+  if (length(feedback_history) > 1 && tail(feedback_history, n=1) == 1) {
+    # Assume opponent sticks with their choice after winning
+    likely_next_move = 1
+  } else {
+    # Assume opponent switches after losing
+    likely_next_move = 0
+  }
+  return(likely_next_move)
+}
+
+###### NOW WE ADJUST the main simulation loop to incorporate ToM
+for (agent in seq(agents)) {
+    # Initialize histories
+    self_history <- other_history <- feedback_history <- numeric(trials)
+    
+    # Initial choices and feedback
+    self_history[1] <- rbinom(1, 1, .5)
+    other_history[1] <- rbinom(1, 1, .5)
+    feedback_history[1] <- as.numeric(self_history[1] == other_history[1])
+    
+    rate <- runif(1, min = .85, max = .9999)
+    
+    for (i in 2:trials) {
+        # Infer opponent's strategy based on feedback history
+        opponent_strategy_inference <- ToM(feedback_history[1:(i-1)])
+        
+        # Determine feedback for both players
+        feedback <- as.numeric(self_history[i - 1] == other_history[i - 1])
+        feedback_history[i] <- feedback
+        
+        # Update strategies based on feedback and ToM inference
+        # For simplicity, just using feedback for self and inference for opponent here
+        self_history[i] <- WSLSAgentProb_f(self_history[i - 1], feedback, rate)
+        # Assuming a function for the opponent that uses the inference
+        # This could be the same WSLS function or a different strategy function that incorporates ToM inference
+        other_history[i] <- WSLSAgentProb_f(other_history[i - 1], opponent_strategy_inference, rate)
+    }
+    
+    temp <- tibble(self_history, other_history, trial = seq(trials), Feedback = as.numeric(self_history == other_history), agent, rate)
+    
+    if (agent == 1) {df4 <- temp} else {df4 <- bind_rows(df4, temp)}
+}
+
+```
+
+
+```{r}
+# Calculate average win rate for each rate
+rate_performance <- df4 %>%
+  group_by(rate) %>%
+  summarize(average_win_rate = mean(Feedback)) %>%
+  mutate(rate_group = cut(rate, breaks = 10)) # Grouping rates into discrete bins for heatmap
+
+# Creating the heatmap
+ggplot(rate_performance, aes(x = rate_group, y = average_win_rate)) +
+  geom_tile(aes(fill = average_win_rate)) + 
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(title = "Heatmap of Rate Parameter Effect on Performance",
+       x = "Rate Group",
+       y = "Average Win Rate (Feedback)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) 
+```
+
+```{r}
+df_long <- df4 %>%
+  pivot_longer(cols = c(self_history, other_history),
+               names_to = "Player",
+               values_to = "Choice")
+
+
+# Adjusted plotting code for the long format
+rate_performance_long <- df_long %>%
+  group_by(rate, Player) %>%
+  summarize(average_win_rate = mean(Feedback), .groups = 'drop') %>%
+  mutate(rate_group = cut(rate, breaks = 10)) 
+
+
+# Creating the heatmap with facet wrap for Self and Other
+ggplot(rate_perforimance_long, aes(x = rate_group, y = average_win_rate)) +
+  geom_tile(aes(fill = average_win_rate)) + 
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(title = "Heatmap of Rate Parameter Effect on Performance by Player",
+       x = "Rate Group",
+       y = "Average Win Rate (Feedback)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  facet_wrap(~Player) # Separate plots for Self and Other
+
+```
+
