@@ -1,0 +1,15 @@
+---
+title: "Port3 Simulation"
+author: "LAURA PAABY"
+date: "2024-03-21"
+output: html_document
+---
+
+# Portfolio 3: Comparison of Multilevel Simple and Weighted Bayes Models 
+
+## Data Simulation 
+
+```{r}
+
+```
+
