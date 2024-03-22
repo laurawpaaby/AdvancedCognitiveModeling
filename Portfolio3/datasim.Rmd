@@ -6,10 +6,314 @@ output: html_document
 ---
 
 # Portfolio 3: Comparison of Multilevel Simple and Weighted Bayes Models 
-
 ## Data Simulation 
+```{r}
+pacman::p_load(extraDistr, tidyverse, truncnorm, cascsim)
+pacman::p_load(tidyverse,
+               here,
+               posterior,
+               cmdstanr,
+               brms, 
+               tidybayes, 
+               loo, job)
+```
+
+Specifying functions:
+Be aware that the structure of the outcome should match the experiment: chose number 1-8. 
+We can either rescale it to be 0-1, or a continous scale (maybe truncated), 
+
+bias is the mean/mode (shape 1) of the $\beta$ distribution -> the location parameter (it is the value you would pick anytime without any other sources )
+
+also have the precision parameter (shape 2) (we dont fit this )
+
+
+#### choices of distributions  
+-\ we are to model a choice between 1-8 in a categorical yet ordinal way (ordered logistic stan user guide)
+-\ another way: turning the 1-8 to a 0-1 scale excluding 0 and 1 (plot the transformation to be sure)
+    -\ now this is just a $\beta$ distribution
+    -\ alternatively, we `logit` it, and get a normal distribution, however this may not be simulating rating behavior            sufficiently
+-\ treat as to be on a continous scale (maybe truncated), but then model structure should be changed  
+    
+  Kind of not nice about this: we then end up with a model were a source1 rating = 6 and a source2 rating = 6, will give a new rating of above six, do to the logit spaces (this is if you are both above the middle of the distribution (like a bias of 4.5 fx))
+  
+  no matter what we choose, discuss the limitation of the chosen distribution and how other may have worked, and maybe also discuss whether this is just inherited issues in Bayes simple model 
+
+```{r}
+## source 1 = own choice
+## source 2 = group choice
+SimpleBayes_f <- function(bias, Source1, Source2, precision){
+  
+  own_rating_s1 <- ((beta(a = bias, b = precision))*10)-1
+  own_rating_s1 <- ((beta(a = bias, b = precision))*10)-1
+  
+  outcome <- inv_logit_scale(bias + logit_scaled(Source1, Source2)) 
+  return(outcome)
+}
+
+WeigthedBayes_f <- function(bias, Source1, w_1,Source2, w_2){
+  w1 <- (w_1-0.5)*2 ### fix what to wrte here
+  w2 <- (w_2-0.5)*2 ### fix what to wrte here
+  outcome <- inv_logit_scale(bias + w1*logit_scaled(Source1) + w2*logit_scaled(Source2)) 
+  return(outcome)
+}
+```
+
+
+```{r}
+#list1 <- c(1:8)
+#hist((rbeta(1000,0.9, 2)*10)-1)
+data <- read_csv("/Users/laura/Desktop/AdvancedCognitiveModeling/Portfolio3/Simonsen_clean.csv")
+
+data1 <- data %>% 
+  filter(ID == sample(unique(ID), 1))
+```
+
+
+```{r}
+Simple_Bayes_M <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Calculate the shape parameters for the beta distribution
+  beta_shape1 <- dataframe$FirstRating + dataframe$GroupRating - 2 * lower_bound
+  beta_shape2 <- 2 * (upper_bound - lower_bound) - beta_shape1
+  
+  # Generate beliefs using the beta distribution
+  updated_beliefs <- rbeta(n, beta_shape1, beta_shape2) # between 0-1
+  
+  # Predict the SecondRating using a binomial distribution
+  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, updated_beliefs)
+  
+  # Return the updated dataframe
+  return(dataframe)
+}
+
+```
+
+
+
+
+```{r}
+Simple_Bayes_US <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Calculate the shape parameters for the beta distribution
+  beta_shape1 <- bias_own*10-1 # this should be between 1-8 -> to get it back, +1/10
+  beta_shape2 <- 2*(upper_bound - lower_bound) - beta_shape1 # the *2 is to avoid a shape2 that is negative (when shape1=8), cause this cannot be in a beta dist
+  
+  # Generate beliefs using the beta distribution
+  updated_beliefs <- rbeta(n, beta_shape1, beta_shape2) # between 0-1
+  
+  # Predict the SecondRating using a binomial distribution
+  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, updated_beliefs)
+  
+  # Return the updated dataframe
+  return(dataframe)
+}
+```
+
+```{r}
+df_us<- Simple_Bayes_US(n=1000, lower_bound = 1, upper_bound = 8, bias_own=0.5,bias_group=0.5)
+unique(df_us$SecondRating_predicted)
+```
+
+```{r}
+################################################################################################
+# here we use the logit setup known from the bayes model presented in class, we do so
+# beacuse it is easier to implement a weigth parameter here. 
+# however, the limitation is now that that trustworthiness must be considered as binary (either or)
+# and the secondrating is a certainty measure, that increases if first rating = group rating 
+
+# TO DO: 
+# put in loop for trials remove n, nested in loop for agents 
+#############################################################################################
+Simple_Bayes_logit <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating_s1 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating_s2 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$scaled_FirstRating_s1 <- (dataframe$FirstRating_s1+1)/10
+  dataframe$scaled_GroupRating_s2 <- (dataframe$GroupRating_s2+1)/10
+  
+  # Generate beliefs using the beta distribution
+  dataframe$updated_beliefs <- inv_logit_scaled(bias_own + logit_scaled(dataframe$scaled_FirstRating_s1)+logit_scaled(dataframe$scaled_GroupRating_s2)) 
+  
+  # Predict the SecondRating using a binomial distribution
+  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, dataframe$updated_beliefs)
+  
+  # Return the updated dataframe
+  return(dataframe)
+}
+```
+
+
+```{r}
+hist(log_df$updated_beliefs)
+hist(log_df$SecondRating_predicted)
+hist(log_df$GroupRating_s2)
+hist(log_df$FirstRating_s1)
+```
+```{r}
+Simple_Bayes_logit <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating_s1 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating_s2 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$scaled_FirstRating_s1 <- (dataframe$FirstRating_s1+1)/10
+  dataframe$scaled_GroupRating_s2 <- (dataframe$GroupRating_s2+1)/10
+  
+  # Generate beliefs using the beta distribution
+  dataframe$updated_beliefs <- inv_logit_scaled(bias_own + logit_scaled(dataframe$scaled_FirstRating_s1)+logit_scaled(dataframe$scaled_GroupRating_s2)) 
+  
+  # Predict the SecondRating using a binomial distribution
+  dataframe$SecondRating_predicted <- lower_bound + rbinom(1, upper_bound - lower_bound, dataframe$updated_beliefs)
+  
+  # Return the updated dataframe
+  return(dataframe)
+}
+
+
+# Loop for 25 agents
+for(agent in 1:25) {
+  
+  # Define biases or other parameters specific to each agent if needed
+  bias_own_agent_specific <- 0.5  
+  bias_group_agent_specific <- 0.5  
+  
+  # Nested loop for executing the function over 100 trials for the current agent
+  for(trials in 1:100) {
+    
+    # Call the Simple_Bayes_logit function for the current set of trials and agent-specific biases
+    agent_data <- Simple_Bayes_logit(n = trials, 
+                                     lower_bound = 1, 
+                                     upper_bound = 8, 
+                                     bias_own = bias_own_agent_specific, 
+                                     bias_group = bias_group_agent_specific)
+  }
+}
+    
+```
+
+
+```{r}
+log_df <- Simple_Bayes_logit(n=1000, lower_bound = 1, upper_bound = 8, bias_own=0.5,bias_group=0.5)
+
+
+unique(df_us$SecondRating_predicted)
+
+```
+
+```{r}
+n=100
+lower_bound = 1
+upper_bound = 8
+bias_own =.5
+bias_group=.5
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating_s1 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating_s2 <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$scaled_FirstRating_s1 <- (dataframe$FirstRating_s1+1)/10
+  dataframe$scaled_GroupRating_s2 <- (dataframe$GroupRating_s2+1)/10
+```
+
+
+
+```{r}
+# lower_bound + rbinom(total_obs, upper_bound - lower_bound, updated_beliefs)
+first_rating <- 1 + rbinom(100, 8 - 1, 0.5)
+first_rating
+group_rating <- 1 + rbinom(100, 8 - 1, 0.1)
+group_rating
+
+?rbinom
+```
+
 
 ```{r}
 
 ```
+
+
+```{r}
+df <- second_rating_beta_bayes_ft(data1)
+```
+
+
+Using functions to simulate data for *153 trials*
+```{r}
+trials = c(1:153)
+
+hist(rtruncnorm(153, a=1, b=8, mean = 4, sd = 3))
+
+```
+
+
+
+
+```{r}
+#logit_scaled(4)
+personal_bias <- 0
+w1 <- .9
+w2 <- .3
+Source1 <- .5
+Source2 <- .8
+
+inv_logit_scaled(personal_bias + w1*logit_scaled(Source1) + w2*logit_scaled(Source1))
+
+```
+
+```{r}
+personal_bias <- -3
+w1 <- .05
+w2 <- .05
+Source1 <- .1
+Source2 <- .1
+
+inv_logit_scaled(personal_bias + w1*logit_scaled(Source1) + w2*logit_scaled(Source1))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
