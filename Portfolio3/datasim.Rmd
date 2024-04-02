@@ -8,8 +8,9 @@ output: html_document
 # Portfolio 3: Comparison of Multilevel Simple and Weighted Bayes Models 
 ## Data Simulation 
 ```{r}
-pacman::p_load(extraDistr, tidyverse, truncnorm, cascsim)
-pacman::p_load(tidyverse,
+pacman::p_load(extraDistr,
+               cascsim,
+               tidyverse,
                here,
                posterior,
                cmdstanr,
@@ -18,27 +19,8 @@ pacman::p_load(tidyverse,
                loo, job)
 ```
 
-
-### the very first functions 
-these needs alteration to match the data of the experiment 
-
-#### choices and considerations 
--\ we are to model a choice between 1-8 in a categorical yet ordinal way (ordered logistic stan user guide)
--\ another way: turning the 1-8 to a 0-1 scale excluding 0 and 1 (plot the transformation to be sure)
-    -\ now this is just a $\beta$ distribution
-    -\ alternatively, we `logit` it, and get a normal distribution, however this may not be simulating rating behavior            sufficiently
--\ treat as to be on a continous scale (maybe truncated), but then model structure should be changed  
-    
-  Kind of not nice about this: we then end up with a model were a source1 rating = 6 and a source2 rating = 6, will give a new rating of above six, do to the logit spaces (this is if you are both above the middle of the distribution (like a bias of 4.5 fx))
-  
-  no matter what we choose, discuss the limitation of the chosen distribution and how other may have worked, and maybe also discuss whether this is just inherited issues in Bayes simple model 
-
-*Specifying functions:*
-Be aware that the structure of the outcome should match the experiment: chose number 1-8. 
-We can either rescale it to be 0-1, or a continous scale (maybe truncated), 
-
-bias is the mean/mode (shape 1) of the $\beta$ distribution -> the location parameter (it is the value you would pick anytime without any other sources ) - also have the precision parameter (shape 2) (we dont fit this)
-
+# The 'original' weighted and simple bayes functions 
+These needs to be altered to match the experiment:
 ```{r}
 ## source 1 = own choice
 ## source 2 = group choice
@@ -60,6 +42,24 @@ WeigthedBayes_f <- function(bias, Source1, w_1,Source2, w_2){
 ```
 
 
+#### choices and considerations of alterations
+-\ we are to model a choice between 1-8 in a categorical yet ordinal way (ordered logistic stan user guide)
+-\ another way: turning the 1-8 to a 0-1 scale excluding 0 and 1 (plot the transformation to be sure)
+    -\ now this is just a $\beta$ distribution
+    -\ alternatively, we `logit` it, and get a normal distribution, however this may not be simulating rating behavior            sufficiently
+-\ treat as to be on a continous scale (maybe truncated), but then model structure should be changed  
+    
+  Kind of not nice about this: we then end up with a model were a source1 rating = 6 and a source2 rating = 6, will give a new rating of above six, do to the logit spaces (this is if you are both above the middle of the distribution (like a bias of 4.5 fx))
+  
+  no matter what we choose, discuss the limitation of the chosen distribution and how other may have worked, and maybe also discuss whether this is just inherited issues in Bayes simple model 
+
+*Specifying functions:*
+Be aware that the structure of the outcome should match the experiment: chose number 1-8. 
+We can either rescale it to be 0-1, or a continous scale (maybe truncated), 
+
+bias is the mean/mode (shape 1) of the $\beta$ distribution -> the location parameter (it is the value you would pick anytime without any other sources ) - also have the precision parameter (shape 2) (we dont fit this)
+
+
 ```{r}
 #list1 <- c(1:8)
 #hist((rbeta(1000,0.9, 2)*10)-1)
@@ -70,72 +70,6 @@ data1 <- data %>%
 ```
 
 
-```{r}
-Simple_Bayes_M <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
-  
-  # Initialize the dataframe with trial numbers
-  dataframe <- data.frame(trials = seq(1, n))
-  
-  # Generate FirstRating and GroupRating based on binomial distribution
-  dataframe$FirstRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
-  dataframe$GroupRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
-  
-  # Calculate the shape parameters for the beta distribution
-  beta_shape1 <- dataframe$FirstRating + dataframe$GroupRating - 2 * lower_bound
-  beta_shape2 <- 2 * (upper_bound - lower_bound) - beta_shape1
-  
-  # Generate beliefs using the beta distribution
-  updated_beliefs <- rbeta(n, beta_shape1, beta_shape2) # between 0-1
-  
-  # Predict the SecondRating using a binomial distribution
-  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, updated_beliefs)
-  
-  # Return the updated dataframe
-  return(dataframe)
-}
-
-```
-
-
-
-
-```{r}
-Simple_Bayes_US <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
-  
-  # Initialize the dataframe with trial numbers
-  dataframe <- data.frame(trials = seq(1, n))
-  
-  # Generate FirstRating and GroupRating based on binomial distribution
-  dataframe$FirstRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
-  dataframe$GroupRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
-  
-  # Calculate the shape parameters for the beta distribution
-  beta_shape1 <- bias_own*10-1 # this should be between 1-8 -> to get it back, +1/10
-  beta_shape2 <- 2*(upper_bound - lower_bound) - beta_shape1 # the *2 is to avoid a shape2 that is negative (when shape1=8), cause this cannot be in a beta dist
-  
-  # Generate beliefs using the beta distribution
-  updated_beliefs <- rbeta(n, beta_shape1, beta_shape2) # between 0-1
-  dataframe$updated_beliefs <- updated_beliefs
-  
-  # Predict the SecondRating using a binomial distribution
-  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, updated_beliefs)
-  
-  # Return the updated dataframe
-  return(dataframe)
-}
-```
-
-
-*explanation to the plot can be found below ...*
-```{r}
-df_us<- Simple_Bayes_US(n=1000, lower_bound = 1, upper_bound = 8, bias_own=0.5,bias_group=0.5)
-unique(df_us$SecondRating_predicted)
-
-hist(df_us$updated_beliefs)
-hist(df_us$FirstRating)
-hist(df_us$GroupRating)
-hist(df_us$SecondRating_predicted)
-```
 
 ```{r}
 #############################################################################################
@@ -145,10 +79,8 @@ hist(df_us$SecondRating_predicted)
 # here we use the logit setup known from the bayes model presented in class, we do so
 # beacuse it is easier to implement a weigth parameter here. 
 # however, the limitation is now that that trustworthiness must be considered as binary (either or)
-# and the secondrating is a certainty measure, that increases if first rating = group rating 
+# and the second rating is a certainty measure, that increases if first rating = group rating 
 
-# TO DO: 
-# put in loop for trials remove n, nested in loop for agents 
 #############################################################################################
 Simple_Bayes_logit <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
   
@@ -162,14 +94,15 @@ Simple_Bayes_logit <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bi
   for (t in 1:n){
   
     # Generate FirstRating and GroupRating based on binomial distribution
-    dataframe$scaled_FirstRating_s1[t] <- (dataframe$FirstRating_s1+1)/10
-    dataframe$scaled_GroupRating_s2[t] <- (dataframe$GroupRating_s2+1)/10
+    dataframe$scaled_FirstRating_s1[t] <- (dataframe$FirstRating_s1[t]+1)/10
+    dataframe$scaled_GroupRating_s2[t] <- (dataframe$GroupRating_s2[t]+1)/10
     
     # Generate beliefs using the beta distribution (this is what affected by weigths)
     dataframe$updated_beliefs[t] <- inv_logit_scaled(bias_own + logit_scaled(dataframe$scaled_FirstRating_s1[t])+logit_scaled(dataframe$scaled_GroupRating_s2[t])) 
     
     # Predict the SecondRating using a binomial distribution
-    dataframe$SecondRating_predicted[t] <- lower_bound + rbinom(n, upper_bound - lower_bound, dataframe$updated_beliefs[t])
+    dataframe$SecondRating_predicted[t] <- lower_bound + rbinom(1, upper_bound - lower_bound, dataframe$updated_beliefs[t])
+    
     
 
     }
@@ -180,7 +113,7 @@ Simple_Bayes_logit <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bi
 
 ```{r, warning=FALSE}
 log_df <- Simple_Bayes_logit(n=1000, lower_bound = 1, upper_bound = 8, bias_own=0.5,bias_group=0.5)
-unique(df_us$SecondRating_predicted)
+unique(log_df$SecondRating_predicted)
 
 ```
 
@@ -191,6 +124,11 @@ hist(log_df$FirstRating_s1)
 hist(log_df$GroupRating_s2)
 hist(log_df$SecondRating_predicted)
 ```
+```{r}
+write_csv(log_df, "/Users/laura/Desktop/AdvancedCognitiveModeling/Portfolio3/data/simple_sim_data.csv")
+```
+
+
 
 ```{r}
 #############################################################################################
@@ -236,11 +174,50 @@ hist(dat_w$FirstRating)
 hist(dat_w$GroupRating)
 hist(dat_w$SecondRating_predicted)
 ```
+```{r}
+write_csv(dat_w, "/Users/laura/Desktop/AdvancedCognitiveModeling/Portfolio3/data/weighted_sim_data.csv")
+```
 
 
 
 
 
 
+#### alternatively, the simple bayes w beta distributions: 
 
+```{r}
+Simple_Bayes_beta <- function(n, lower_bound = 1, upper_bound = 8, bias_own, bias_group) {
+  
+  # Initialize the dataframe with trial numbers
+  dataframe <- data.frame(trials = seq(1, n))
+  
+  # Generate FirstRating and GroupRating based on binomial distribution
+  dataframe$FirstRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_own)
+  dataframe$GroupRating <- lower_bound + rbinom(n, upper_bound - lower_bound, bias_group)
+  
+  # Calculate the shape parameters for the beta distribution
+  beta_shape1 <- bias_own*10-1 # this should be between 1-8 -> to get it back, +1/10
+  beta_shape2 <- 2*(upper_bound - lower_bound) - beta_shape1 # the *2 is to avoid a shape2 that is negative (when shape1=8), cause this cannot be in a beta dist
+  
+  # Generate beliefs using the beta distribution
+  updated_beliefs <- rbeta(n, beta_shape1, beta_shape2) # between 0-1
+  dataframe$updated_beliefs <- updated_beliefs
+  
+  # Predict the SecondRating using a binomial distribution
+  dataframe$SecondRating_predicted <- lower_bound + rbinom(n, upper_bound - lower_bound, updated_beliefs)
+  
+  # Return the updated dataframe
+  return(dataframe)
+}
+```
+
+```{r}
+df_us<- Simple_Bayes_US(n=1000, lower_bound = 1, upper_bound = 8, bias_own=0.5,bias_group=0.5)
+unique(df_us$SecondRating_predicted)
+
+hist(df_us$updated_beliefs)
+hist(df_us$FirstRating)
+hist(df_us$GroupRating)
+hist(df_us$SecondRating_predicted)
+```
 

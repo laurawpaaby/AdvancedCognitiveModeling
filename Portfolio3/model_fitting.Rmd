@@ -1,0 +1,78 @@
+---
+title: "Model Fitting, Port 3"
+author: "LAURA PAABY"
+date: "2024-04-02"
+output: html_document
+---
+
+
+# Fit the Stan Models (simple and weighted Bayes) to Simulated Data
+
+### simple bayes: 
+```{r}
+# Loading model
+file_simple <- file.path("/Users/laura/Desktop/AdvancedCognitiveModeling/Portfolio3/simple_bayes.stan")
+simple_mod <- cmdstan_model(file_simple, 
+                     cpp_options = list(stan_threads = TRUE),
+                     stanc_options = list("O1"))
+```
+
+
+```{r}
+# Loading simulated data
+simple_sim_data <- read_csv("/Users/laura/Desktop/AdvancedCognitiveModeling/Portfolio3/data/simple_sim_data.csv")
+simple_sim_data <- simple_sim_data %>%
+  rename(first_rating = FirstRating_s1,
+         group_rating = GroupRating_s2,
+         second_rating = SecondRating_predicted)
+
+# fixing it to be stan format
+simple_data_list <- list(
+  trials = nrow(simple_sim_data),
+  first_rating = simple_sim_data$first_rating,
+  group_rating = simple_sim_data$group_rating,
+  second_rating = simple_sim_data$second_rating
+)
+
+```
+
+```{r}
+samples_simple <- simple_mod$sample(
+  data = simple_data_list,
+  seed = 123,
+  chains = 2,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 2000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+```
+```{r}
+draws_simple <- as_draws_df(samples_simple$draws()) 
+head(draws_simple)
+```
+
+
+```{r}
+# Now let's plot the density for bias prior and posterior 
+ggplot() +
+  geom_density(aes(draws_simple$bias), fill = "blue", alpha = 0.3) + ### posterior from model 
+  geom_density(aes(rbeta(4000,2,2)), fill = "darkgreen", alpha = 0.3) + ### just directly simulated as it isnt nested in the model 
+  xlab("Rate") +
+  ylab("Density") +
+  labs(title="Prior Posterior Check, Bias", subtitle = "Simple Weighted Bayes") +
+  theme_classic()
+```
+
+
+### Extracting Loo Scores: 
+```{r}
+log_simple_kfold[,d$fold == k] <- simple_mod$draws("log_lik_test", format="matrix")
+```
+
+
+
+
